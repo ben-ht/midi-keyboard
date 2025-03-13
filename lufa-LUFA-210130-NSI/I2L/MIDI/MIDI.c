@@ -43,11 +43,33 @@ int STATE_RELAXED = -1 ;
 int STATE_PRESSED = -1 ;
 bool toProcess = false ;
 
+typedef struct {
+	volatile unsigned char *dir;
+	volatile unsigned char *port;
+	volatile unsigned char *pin;
+	unsigned char bit;
+} pin_t;
+
+pin_t lines[NB_LINES]={
+	{&DDRF,&PORTF,&PINF,7},
+	{&DDRF,&PORTF,&PINF,6},
+	{&DDRF,&PORTF,&PINF,5},
+	{&DDRF,&PORTF,&PINF,4}
+};
+  
+pin_t cols[NB_COLS]={
+	{&DDRC,&PORTC,&PINC,7},
+	{&DDRC,&PORTC,&PINC,6},
+	{&DDRB,&PORTB,&PINB,6},
+	{&DDRB,&PORTB,&PINB,5},
+	{&DDRB,&PORTB,&PINB,4},
+};  
+
 // dans l'ordre : C, C#, D, D#, E, F, F#, G, G#, A, A#, B
-struct {
+typedef struct  {
     int keysButton;
     int midiNote;
-} NoteMIDI;
+} NoteMIDI ;
 
 NoteMIDI notes[] = {
 	{00, 12}, {7, 13}, {00, 14}, {11, 15}, {00, 16}, {00, 17},
@@ -59,11 +81,12 @@ int giveMidiNote(int buttonId) {
 	int taille = sizeof(notes) / sizeof(notes[0]);
     for (int i = 0; i < taille; i++) {
         if (buttonId == notes[i].keysButton) {
-            printf("La note %s a la valeur MIDI %d\n", recherche, notes[i].midiNote);
 			return notes[i].midiNote ;
         }
     }
 }
+
+void scanne_touches() ;
 
 /** Main program entry point. This routine configures the hardware required by the application, then
  *  enters a loop to run the application tasks in sequence.
@@ -167,13 +190,13 @@ void MIDI_Task(void)
 		/* Get board button status - if pressed use channel 10 (percussion), otherwise use channel 1 */
 		uint8_t Channel = ((Buttons_GetStatus() & BUTTONS_BUTTON1) ? MIDI_CHANNEL(10) : MIDI_CHANNEL(1));
 
-		if(STATE_PRESSED != null && toProcess) {
+		if(STATE_PRESSED != -1 && toProcess) {
 			MIDICommand = MIDI_COMMAND_NOTE_ON ;
 			MIDIPitch = giveMidiNote(STATE_PRESSED) ;
 			toProcess = false ;
 		}
 
-		if(STATE_RELAXED != null && toProcess) {
+		if(STATE_RELAXED != -1 && toProcess) {
 			MIDICommand = MIDI_COMMAND_NOTE_OFF ;
 			MIDIPitch = giveMidiNote(STATE_RELAXED) ;
 			toProcess = false ;
@@ -211,23 +234,23 @@ void MIDI_Task(void)
 		// }
 
 		// /* Check if a MIDI command is to be sent */
-		// if (MIDICommand)
-		// {
-		// 	MIDI_EventPacket_t MIDIEvent = (MIDI_EventPacket_t)
-		// 		{
-		// 			.Event       = MIDI_EVENT(0, MIDICommand),
+		if (MIDICommand)
+		{
+			MIDI_EventPacket_t MIDIEvent = (MIDI_EventPacket_t)
+				{
+					.Event       = MIDI_EVENT(0, MIDICommand),
 
-		// 			.Data1       = MIDICommand | Channel,
-		// 			.Data2       = MIDIPitch,
-		// 			.Data3       = MIDI_STANDARD_VELOCITY,
-		// 		};
+					.Data1       = MIDICommand | Channel,
+					.Data2       = MIDIPitch,
+					.Data3       = MIDI_STANDARD_VELOCITY,
+				};
 
-		// 	/* Write the MIDI event packet to the endpoint */
-		// 	Endpoint_Write_Stream_LE(&MIDIEvent, sizeof(MIDIEvent), NULL);
+			/* Write the MIDI event packet to the endpoint */
+			Endpoint_Write_Stream_LE(&MIDIEvent, sizeof(MIDIEvent), NULL);
 
-		// 	/* Send the data in the endpoint to the host */
-		// 	Endpoint_ClearIN();
-		// }
+			/* Send the data in the endpoint to the host */
+			Endpoint_ClearIN();
+		}
 
 		// /* Save previous joystick value for next joystick change detection */
 		// PrevJoystickStatus = JoystickStatus;
@@ -280,16 +303,16 @@ void scanne_touches() {
 
 			if(!(*cols[c].pin & (1 << cols[c].bit))) { // Si une colonne est à 0V
 				// touche enfoncée
-				if(STATE_PRESSED == null){
+				if(STATE_PRESSED == -1){
 					STATE_PRESSED = t ;
-					STATE_RELAXED = null ;
+					STATE_RELAXED = -1 ;
 					toProcess = true ;
 				} 
 			} else {
 				// pas appuyée
 				if(STATE_PRESSED == t){
 					STATE_RELAXED = t ;
-					STATE_PRESSED = null ;
+					STATE_PRESSED = -1 ;
 					toProcess = true ;
 				} 
 			}
