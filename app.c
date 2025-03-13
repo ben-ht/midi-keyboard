@@ -13,6 +13,8 @@ typedef struct {
 #define NB_LINES	4
 #define NB_COLS		5
 
+#define ADFR      5
+
 pin_t leds[NB_LEDS]={
   {&DDRE,&PORTE,&PINE,6},
   {&DDRF,&PORTF,&PINF,0}
@@ -33,9 +35,13 @@ pin_t cols[NB_COLS]={
   {&DDRB,&PORTB,&PINB,4},
 };
 
-void conf_horloge() ;
-void init() ;
-void clignote() ;
+pin_t pot = {&DDRF, &PORTF, &PINF, 1};
+
+void conf_horloge();
+void init();
+void clignote();
+void ad_init(unsigned char channel);
+unsigned int ad_capture(void);
 
 int main(void){
     conf_horloge();
@@ -55,9 +61,19 @@ int main(void){
     _delay_ms(500);
     HD44780_WriteString("MIDI KEYBOARD");
 
+    ad_init(pot.bit);
+    *pot.dir |= (1 << pot.bit);
+    unsigned int pot_value;
+
     for(int i=0;i<NB_LINES;i++) *lines[i].port |= (1 << lines[i].bit);
 
     while(1){
+        pot_value = ad_capture();
+        HDD44780_GoTo(28);
+        HD44780_WriteInteger(pot_value, 10);
+        HD44780_WriteString("   ");
+        _delay_ms(200);
+
         for(uint8_t l=0 ; l<NB_LINES ; l++) {
 
             // activer une ligne à la fois
@@ -110,5 +126,18 @@ void init(){
 
     // Set rows as ouput
     for(int i=0;i<NB_LINES;i++) *lines[i].dir |= (1 << lines[i].bit);
+}
 
+void ad_init(unsigned char channel){
+    ADCSRA |= (1<<ADPS2)|(1<<ADPS1)|(1<<ADPS0); // Division frequency 128 => 125KHz
+    ADCSRA &= ~(1<<ADFR);                       // Single conversion mode
+    ADMUX |= (1<<REFS0)|(1<<ADLAR);             // Voltage reference AVCC, left-adjust result
+    ADMUX = (ADMUX & 0xf0) | channel;           // Select channel   
+    ADCSRA |= (1<<ADEN);                        // Enable ADC
+}
+
+unsigned int ad_capture(void){
+    ADCSRA |= (1<<ADSC);                      // Start conversion
+    while(bit_is_set(ADCSRA, ADSC));          // Wait for conversion to complete
+    return ADCH;                              // Return 8-bit result (0-255)
 }
