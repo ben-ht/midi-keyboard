@@ -33,8 +33,6 @@ pin_t cols[NB_COLS]={
   {&DDRB,&PORTB,&PINB,4},
 };
 
-
-
 void conf_horloge() ;
 void init() ;
 void clignote() ;
@@ -54,6 +52,9 @@ int main(void){
     HD44780_WriteCommand(LCD_HOME);
     HD44780_WriteCommand(LCD_INCR_RIGHT);
 
+    _delay_ms(500);
+    HD44780_WriteString("MIDI KEYBOARD");
+
     for(int i=0;i<NB_LINES;i++) *lines[i].port |= (1 << lines[i].bit);
 
     while(1){
@@ -65,16 +66,13 @@ int main(void){
             // vérifier chaque colonne
             for(uint8_t c = 0; c < NB_COLS; c++) {
 
-                int t = l*NB_COLS + c ;
+                int t = l * NB_COLS + c ;
 
                 if(!(*cols[c].pin & (1 << cols[c].bit))) { // Si une colonne est à 0V
                     if(t == 15) clignote() ;
                 }
                 
             }
-
-
-            // if(!(PINC & (1 << 7))) clignote() ;
 
             *lines[l].port |= (1 << lines[l].bit) ;
         }
