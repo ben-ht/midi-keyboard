@@ -1,75 +1,118 @@
 /*
-             LUFA Library
-     Copyright (C) Dean Camera, 2021.
+			LUFA Library
+	Copyright (C) Dean Camera, 2021.
 
-  dean [at] fourwalledcubicle [dot] com
-           www.lufa-lib.org
+dean [at] fourwalledcubicle [dot] com
+		www.lufa-lib.org
 */
 
 /*
-  Copyright 2021  Dean Camera (dean [at] fourwalledcubicle [dot] com)
+Copyright 2021  Dean Camera (dean [at] fourwalledcubicle [dot] com)
 
-  Permission to use, copy, modify, distribute, and sell this
-  software and its documentation for any purpose is hereby granted
-  without fee, provided that the above copyright notice appear in
-  all copies and that both that the copyright notice and this
-  permission notice and warranty disclaimer appear in supporting
-  documentation, and that the name of the author not be used in
-  advertising or publicity pertaining to distribution of the
-  software without specific, written prior permission.
+Permission to use, copy, modify, distribute, and sell this
+software and its documentation for any purpose is hereby granted
+without fee, provided that the above copyright notice appear in
+all copies and that both that the copyright notice and this
+permission notice and warranty disclaimer appear in supporting
+documentation, and that the name of the author not be used in
+advertising or publicity pertaining to distribution of the
+software without specific, written prior permission.
 
-  The author disclaims all warranties with regard to this
-  software, including all implied warranties of merchantability
-  and fitness.  In no event shall the author be liable for any
-  special, indirect or consequential damages or any damages
-  whatsoever resulting from loss of use, data or profits, whether
-  in an action of contract, negligence or other tortious action,
-  arising out of or in connection with the use or performance of
-  this software.
+The author disclaims all warranties with regard to this
+software, including all implied warranties of merchantability
+and fitness.  In no event shall the author be liable for any
+special, indirect or consequential damages or any damages
+whatsoever resulting from loss of use, data or profits, whether
+in an action of contract, negligence or other tortious action,
+arising out of or in connection with the use or performance of
+this software.
 */
 
 /** \file
- *
- *  Main source file for the MIDI input demo. This file contains the main tasks of the demo and
- *  is responsible for the initial application hardware configuration.
- */
+*
+*  Main source file for the MIDI input demo. This file contains the main tasks of the demo and
+*  is responsible for the initial application hardware configuration.
+*/
 
 #include "MIDI.h"
+#include "HD44780.h"
 
-#define NB_LINES		4
-#define NB_COLS			5
+#define NB_LEDS		2
+#define NB_LINES	4
+#define NB_COLS		5
+
+typedef struct {
+	volatile unsigned char *dir;
+	volatile unsigned char *port;
+	volatile unsigned char *pin;
+	unsigned char bit;
+} pin_t;
+
+typedef struct {
+	int keysButton;
+	unsigned midiNote;
+} NoteMIDI;
+
+pin_t leds[NB_LEDS]={
+{&DDRE,&PORTE,&PINE,6},
+{&DDRF,&PORTF,&PINF,0}
+};
+
+pin_t lines[NB_LINES]={
+{&DDRF,&PORTF,&PINF,7},
+{&DDRF,&PORTF,&PINF,6},
+{&DDRF,&PORTF,&PINF,5},
+{&DDRF,&PORTF,&PINF,4}
+};
+
+pin_t cols[NB_COLS]={
+{&DDRC,&PORTC,&PINC,7},
+{&DDRC,&PORTC,&PINC,6},
+{&DDRB,&PORTB,&PINB,6},
+{&DDRB,&PORTB,&PINB,5},
+{&DDRB,&PORTB,&PINB,4},
+};
 
 int STATE_RELAXED = -1 ;
 int STATE_PRESSED = -1 ;
 bool toProcess = false ;
 
-// dans l'ordre : C, C#, D, D#, E, F, F#, G, G#, A, A#, B
-struct {
-    int keysButton;
-    int midiNote;
-} NoteMIDI;
-
-NoteMIDI notes[] = {
-	{00, 12}, {7, 13}, {00, 14}, {11, 15}, {00, 16}, {00, 17},
-	{8, 18}, {00, 19}, {16, 20}, {00, 21}, {3, 22}, {00, 23}
+// 60 to 71 => Octave 3 in order C, C#, D, D#, E, F, F#, G, G#, A, A#, B
+// 72 TO 77 => Octave 4 up to F
+NoteMIDI notes[18] = { 
+	{4, 60}, {3, 61}, {1, 62}, {2, 63}, {0, 64}, {9, 65},
+	{8, 66}, {7, 67}, {6, 68}, {5, 69}, {14, 70}, {13, 71},
+	{12, 72}, {11, 73}, {10, 74}, {19, 75}, {18, 76}, {17, 77}
 };
 
-int giveMidiNote(int buttonId) {
-	// Recherche d'une note
-	int taille = sizeof(notes) / sizeof(notes[0]);
-    for (int i = 0; i < taille; i++) {
-        if (buttonId == notes[i].keysButton) {
-            printf("La note %s a la valeur MIDI %d\n", recherche, notes[i].midiNote);
-			return notes[i].midiNote ;
-        }
-    }
-}
+int giveMidiNote(int);
+void scanne_touches(void);
+void conf_horloge(void);
+void init(void);
 
 /** Main program entry point. This routine configures the hardware required by the application, then
- *  enters a loop to run the application tasks in sequence.
- */
+*  enters a loop to run the application tasks in sequence.
+*/
 int main(void)
 {
+	conf_horloge();
+
+	// désactive JTAG pour utilisation de PF4 à PF7 :
+	MCUCR |= (1<<JTD);
+	MCUCR |= (1<<JTD);
+
+	init();
+
+	HD44780_Initialize();
+	HD44780_WriteCommand(LCD_ON|CURSOR_NONE);
+	HD44780_WriteCommand(LCD_CLEAR);
+	HD44780_WriteCommand(LCD_HOME);
+	HD44780_WriteCommand(LCD_INCR_RIGHT);
+
+	_delay_ms(500);
+
+	HD44780_WriteString("MIDI Keyboard")
+
 	SetupHardware();
 
 	LEDs_SetAllLEDs(LEDMASK_USB_NOTREADY);
@@ -77,9 +120,9 @@ int main(void)
 
 	for (;;)
 	{
+		scanne_touches();
 		MIDI_Task();
 		USB_USBTask();
-		scanne_touches() ;
 	}
 }
 
@@ -120,8 +163,8 @@ void EVENT_USB_Device_Connect(void)
 }
 
 /** Event handler for the USB_Disconnect event. This indicates that the device is no longer connected to a host via
- *  the status LEDs, disables the sample update and PWM output timers and stops the USB and MIDI management tasks.
- */
+*  the status LEDs, disables the sample update and PWM output timers and stops the USB and MIDI management tasks.
+*/
 void EVENT_USB_Device_Disconnect(void)
 {
 	/* Indicate USB not ready */
@@ -129,8 +172,8 @@ void EVENT_USB_Device_Disconnect(void)
 }
 
 /** Event handler for the USB_ConfigurationChanged event. This is fired when the host set the current configuration
- *  of the USB device after enumeration - the device endpoints are configured and the MIDI management task started.
- */
+*  of the USB device after enumeration - the device endpoints are configured and the MIDI management task started.
+*/
 void EVENT_USB_Device_ConfigurationChanged(void)
 {
 	bool ConfigSuccess = true;
@@ -144,15 +187,15 @@ void EVENT_USB_Device_ConfigurationChanged(void)
 }
 
 /** Task to handle the generation of MIDI note change events in response to presses of the board joystick, and send them
- *  to the host.
- */
+*  to the host.
+*/
 void MIDI_Task(void)
 {
 	static uint8_t PrevJoystickStatus;
 
 	/* Device must be connected and configured for the task to run */
 	if (USB_DeviceState != DEVICE_STATE_Configured)
-	  return;
+	return;
 
 	Endpoint_SelectEndpoint(MIDI_STREAM_IN_EPADDR);
 
@@ -167,16 +210,16 @@ void MIDI_Task(void)
 		/* Get board button status - if pressed use channel 10 (percussion), otherwise use channel 1 */
 		uint8_t Channel = ((Buttons_GetStatus() & BUTTONS_BUTTON1) ? MIDI_CHANNEL(10) : MIDI_CHANNEL(1));
 
-		if(STATE_PRESSED != null && toProcess) {
+		if(STATE_PRESSED != -1 && toProcess) {
 			MIDICommand = MIDI_COMMAND_NOTE_ON ;
-			MIDIPitch = giveMidiNote(STATE_PRESSED) ;
-			toProcess = false ;
+			MIDIPitch = giveMidiNote(STATE_PRESSED);
+			toProcess = false;
 		}
 
-		if(STATE_RELAXED != null && toProcess) {
-			MIDICommand = MIDI_COMMAND_NOTE_OFF ;
-			MIDIPitch = giveMidiNote(STATE_RELAXED) ;
-			toProcess = false ;
+		if(STATE_RELAXED != -1 && toProcess) {
+			MIDICommand = MIDI_COMMAND_NOTE_OFF;
+			MIDIPitch = giveMidiNote(STATE_RELAXED);
+			toProcess = false;
 		}
 
 
@@ -210,24 +253,24 @@ void MIDI_Task(void)
 		// 	MIDIPitch   = 0x3B;
 		// }
 
-		// /* Check if a MIDI command is to be sent */
-		// if (MIDICommand)
-		// {
-		// 	MIDI_EventPacket_t MIDIEvent = (MIDI_EventPacket_t)
-		// 		{
-		// 			.Event       = MIDI_EVENT(0, MIDICommand),
+		/* Check if a MIDI command is to be sent */
+		if (MIDICommand)
+		{
+			MIDI_EventPacket_t MIDIEvent = (MIDI_EventPacket_t)
+				{
+					.Event       = MIDI_EVENT(0, MIDICommand),
 
-		// 			.Data1       = MIDICommand | Channel,
-		// 			.Data2       = MIDIPitch,
-		// 			.Data3       = MIDI_STANDARD_VELOCITY,
-		// 		};
+					.Data1       = MIDICommand | Channel,
+					.Data2       = MIDIPitch,
+					.Data3       = MIDI_STANDARD_VELOCITY,
+				};
 
-		// 	/* Write the MIDI event packet to the endpoint */
-		// 	Endpoint_Write_Stream_LE(&MIDIEvent, sizeof(MIDIEvent), NULL);
+			/* Write the MIDI event packet to the endpoint */
+			Endpoint_Write_Stream_LE(&MIDIEvent, sizeof(MIDIEvent), NULL);
 
-		// 	/* Send the data in the endpoint to the host */
-		// 	Endpoint_ClearIN();
-		// }
+			/* Send the data in the endpoint to the host */
+			Endpoint_ClearIN();
+		}
 
 		// /* Save previous joystick value for next joystick change detection */
 		// PrevJoystickStatus = JoystickStatus;
@@ -267,7 +310,7 @@ void MIDI_Task(void)
 }
 
 
-void scanne_touches() {
+void scanne_touches(void) {
 	for(uint8_t l=0 ; l<NB_LINES ; l++) {
 
 		// activer une ligne à la fois
@@ -280,23 +323,55 @@ void scanne_touches() {
 
 			if(!(*cols[c].pin & (1 << cols[c].bit))) { // Si une colonne est à 0V
 				// touche enfoncée
-				if(STATE_PRESSED == null){
+				if(STATE_PRESSED == -1){
 					STATE_PRESSED = t ;
-					STATE_RELAXED = null ;
+					STATE_RELAXED = -1 ;
 					toProcess = true ;
 				} 
 			} else {
 				// pas appuyée
 				if(STATE_PRESSED == t){
 					STATE_RELAXED = t ;
-					STATE_PRESSED = null ;
+					STATE_PRESSED = -1 ;
 					toProcess = true ;
 				} 
-			}
-			
+			}		
 		}
 
 		*lines[l].port |= (1 << lines[l].bit) ;
 	}
+}
+
+void conf_horloge(void){
+	CLKSEL0 = 0b00010101;   // sélection de l'horloge externe
+	CLKSEL1 = 0b00010000;   // minimum de 16Mhz
+	CLKPR = 0b10000000;     // modification du diviseur d'horloge (CLKPCE=1)
+	CLKPR = 0;              // 0 pour pas de diviseur (diviseur de 1)
+}
+
+void init(void){
+	// Set LEDs as output
+	for(int i=0;i<NB_LEDS;i++) *leds[i].dir |= (1 << leds[i].bit);
+
+	// Set cols as input + pull up charge
+	for(int i=0;i<NB_COLS;i++){
+		*cols[i].dir &= ~(1 << cols[i].bit); // 0 : une entrée
+		*cols[i].port |= (1 << cols[i].bit); // 1 : pull up, résist charge
+	}
+
+	// Set rows as ouput
+	for(int i=0;i<NB_LINES;i++) *lines[i].dir |= (1 << lines[i].bit);
+}
+
+int giveMidiNote(int buttonId) {
+	// Recherche d'une note
+	int taille = sizeof(notes) / sizeof(notes[0]);
+	for (int i = 0; i < taille; i++) {
+		if (buttonId == notes[i].keysButton) {
+			return notes[i].midiNote;
+		}
+	}
+
+	return -1;
 }
 
