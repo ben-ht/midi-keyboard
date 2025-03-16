@@ -73,9 +73,10 @@ pin_t cols[NB_COLS]={
 {&DDRB,&PORTB,&PINB,4},
 };
 
-int STATE_RELAXED = -1 ;
-int STATE_PRESSED = -1 ;
-bool toProcess = false ;
+int isReleased = -1;
+int isPressed = -1;
+bool toProcess = false;
+int octave = 3; // Defaults to 3rd octave
 
 // 60 to 71 => Octave 3 in order C, C#, D, D#, E, F, F#, G, G#, A, A#, B
 // 72 TO 77 => Octave 4 up to F
@@ -89,6 +90,9 @@ int giveMidiNote(int);
 void scanne_touches(void);
 void conf_horloge(void);
 void init(void);
+void octaveUp(void);
+void octaveDown(void);
+void handleOctaveLeds(void);
 
 /** Main program entry point. This routine configures the hardware required by the application, then
 *  enters a loop to run the application tasks in sequence.
@@ -111,7 +115,7 @@ int main(void)
 
 	_delay_ms(500);
 
-	HD44780_WriteString("MIDI Keyboard")
+	HD44780_WriteString("MIDI Keyboard");
 
 	SetupHardware();
 
@@ -210,15 +214,15 @@ void MIDI_Task(void)
 		/* Get board button status - if pressed use channel 10 (percussion), otherwise use channel 1 */
 		uint8_t Channel = ((Buttons_GetStatus() & BUTTONS_BUTTON1) ? MIDI_CHANNEL(10) : MIDI_CHANNEL(1));
 
-		if(STATE_PRESSED != -1 && toProcess) {
-			MIDICommand = MIDI_COMMAND_NOTE_ON ;
-			MIDIPitch = giveMidiNote(STATE_PRESSED);
+		if(isPressed != -1 && toProcess) {
+			MIDICommand = MIDI_COMMAND_NOTE_ON;
+			MIDIPitch = giveMidiNote(isPressed);
 			toProcess = false;
 		}
 
-		if(STATE_RELAXED != -1 && toProcess) {
+		if(isReleased != -1 && toProcess) {
 			MIDICommand = MIDI_COMMAND_NOTE_OFF;
-			MIDIPitch = giveMidiNote(STATE_RELAXED);
+			MIDIPitch = giveMidiNote(isReleased);
 			toProcess = false;
 		}
 
@@ -311,34 +315,42 @@ void MIDI_Task(void)
 
 
 void scanne_touches(void) {
-	for(uint8_t l=0 ; l<NB_LINES ; l++) {
+	for(uint8_t l=0; l<NB_LINES ; l++) {
 
 		// activer une ligne à la fois
-		*lines[l].port &= ~(1 << lines[l].bit) ; // Cmet la ligne à 0V
+		*lines[l].port &= ~(1 << lines[l].bit); // Cmet la ligne à 0V
 
 		// vérifier chaque colonne
 		for(uint8_t c = 0; c < NB_COLS; c++) {
 
-			int t = l * NB_COLS + c ;
+			int t = l * NB_COLS + c;
 
 			if(!(*cols[c].pin & (1 << cols[c].bit))) { // Si une colonne est à 0V
 				// touche enfoncée
-				if(STATE_PRESSED == -1){
-					STATE_PRESSED = t ;
-					STATE_RELAXED = -1 ;
-					toProcess = true ;
-				} 
+				if(isPressed == -1){
+					isPressed = t;
+					isReleased = -1;
+					toProcess = true;
+				}
+
+				if (t == -1) {
+					octaveUp();
+					handleOctaveLeds();
+				} else if (t == -2){
+					octaveDown();
+					handleOctaveLeds();
+				}	
 			} else {
 				// pas appuyée
-				if(STATE_PRESSED == t){
-					STATE_RELAXED = t ;
-					STATE_PRESSED = -1 ;
-					toProcess = true ;
+				if(isPressed == t){
+					isReleased = t;
+					isPressed = -1;
+					toProcess = true;
 				} 
 			}		
 		}
 
-		*lines[l].port |= (1 << lines[l].bit) ;
+		*lines[l].port |= (1 << lines[l].bit);
 	}
 }
 
@@ -373,5 +385,38 @@ int giveMidiNote(int buttonId) {
 	}
 
 	return -1;
+}
+
+void octaveUp(void) {
+	size_t length = sizeof(notes) / sizeof(notes[0]);
+	for (int i = 0; i < length; i++) {
+		notes[i].midiNote += 18;
+	}
+	if (octave < 8) {
+		octave++;
+	}
+}
+
+
+void octaveDown(void) {
+	size_t length = sizeof(notes) / sizeof(notes[0]);
+	for (int i = 0; i < length; i++) {
+		notes[i].midiNote -= 18;
+	}
+	if (octave > 1) {
+		octave--;
+	}
+}
+
+
+void handleOctaveLeds(void) {
+	if (octave > 3) {
+		leds[0].port |= (1 << leds[0].bit);
+	else if (octave < 3) {
+		leds[1].port |= (1 << leds[1.bit);
+	else {
+		leds[0].port &= ~(1 << leds[0].bit);
+		leds[1].port &= ~(1 << leds[1].bit);
+	}
 }
 
