@@ -93,6 +93,7 @@ void init(void);
 void octaveUp(void);
 void octaveDown(void);
 void handleOctaveLeds(void);
+void octaveTask(void);
 
 /** Main program entry point. This routine configures the hardware required by the application, then
 *  enters a loop to run the application tasks in sequence.
@@ -125,6 +126,7 @@ int main(void)
 	for (;;)
 	{
 		scanne_touches();
+		octaveTask();
 		MIDI_Task();
 		USB_USBTask();
 	}
@@ -332,14 +334,6 @@ void scanne_touches(void) {
 					isReleased = -1;
 					toProcess = true;
 				}
-
-				if (t == -1) {
-					octaveUp();
-					handleOctaveLeds();
-				} else if (t == -2){
-					octaveDown();
-					handleOctaveLeds();
-				}	
 			} else {
 				// pas appuyée
 				if(isPressed == t){
@@ -392,7 +386,7 @@ void octaveUp(void) {
 	for (int i = 0; i < length; i++) {
 		notes[i].midiNote += 18;
 	}
-	if (octave < 8) {
+	if (octave < 7) {
 		octave++;
 	}
 }
@@ -411,12 +405,32 @@ void octaveDown(void) {
 
 void handleOctaveLeds(void) {
 	if (octave > 3) {
-		leds[0].port |= (1 << leds[0].bit);
-	else if (octave < 3) {
-		leds[1].port |= (1 << leds[1.bit);
-	else {
-		leds[0].port &= ~(1 << leds[0].bit);
-		leds[1].port &= ~(1 << leds[1].bit);
+		*leds[0].port |= (1 << leds[0].bit);
+	} else if (octave < 3) {
+		*leds[1].port |= (1 << leds[1].bit);
+	} else {
+		*leds[0].port &= ~(1 << leds[0].bit);
+		*leds[1].port &= ~(1 << leds[1].bit);
+	}
+}
+
+void octaveTask(void) {
+	if (isPressed == 16 && toProcess) {
+		octaveUp();
+		handleOctaveLeds();
+		HD44780_GoTo(31);
+		HD44780_WriteInteger(octave, 10);
+		isPressed = -1;
+		toProcess = false;
+		_delay_ms(250);
+	} else if (isPressed == 15 && toProcess) {
+		octaveDown();
+		handleOctaveLeds();
+		HD44780_GoTo(31);
+		HD44780_WriteInteger(octave, 10);
+		isPressed = -1;
+		toProcess = false;
+		_delay_ms(250);
 	}
 }
 

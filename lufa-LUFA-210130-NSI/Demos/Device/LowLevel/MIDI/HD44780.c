@@ -108,3 +108,10 @@ int HD44780_XY2Adrr(int nbrows,int nbcols,int row,int col)
   return row_offsets[row]+col;
 }
 
+void HD44780_GoTo(unsigned char pos) {
+	if (pos < 16) {
+		HD44780_WriteCommand(0x80 + pos);
+	} else {
+		HD44780_WriteCommand(0xC0 + (pos - 16));
+	}
+}

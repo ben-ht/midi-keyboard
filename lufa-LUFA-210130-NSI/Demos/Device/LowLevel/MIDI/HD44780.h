@@ -23,3 +23,4 @@ void HD44780_WriteData(const uint8_t c);
 void HD44780_WriteString(char *string);
 void HD44780_WriteInteger(int num,int radix);
 int HD44780_XY2Adrr(int nbrows,int nbcols,int row,int col);
+void HD44780_GoTo(unsigned char pos);
