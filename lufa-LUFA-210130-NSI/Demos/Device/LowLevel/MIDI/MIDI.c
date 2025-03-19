@@ -40,6 +40,8 @@ this software.
 #define NB_LEDS		2
 #define NB_LINES	4
 #define NB_COLS		5
+#define ADFR		5
+#define FILTER_WEIGHT	0.8
 
 typedef struct {
 	volatile unsigned char *dir;
@@ -73,10 +75,14 @@ pin_t cols[NB_COLS]={
 {&DDRB,&PORTB,&PINB,4},
 };
 
+pin_t pot = {&DDRF,&PORTF,&PINF,1};
+
 int isReleased = -1;
 int isPressed = -1;
 bool toProcess = false;
 int octave = 3; // Defaults to 3rd octave
+uint8_t volume = 0;
+float filteredVolume = 0;
 
 // 60 to 71 => Octave 3 in order C, C#, D, D#, E, F, F#, G, G#, A, A#, B
 // 72 TO 77 => Octave 4 up to F
@@ -94,6 +100,8 @@ void octaveUp(void);
 void octaveDown(void);
 void handleOctaveLeds(void);
 void octaveTask(void);
+void ad_init(unsigned char channel);
+unsigned int ad_capture(void);
 
 /** Main program entry point. This routine configures the hardware required by the application, then
 *  enters a loop to run the application tasks in sequence.
@@ -117,6 +125,9 @@ int main(void)
 	_delay_ms(500);
 
 	HD44780_WriteString("MIDI Keyboard");
+
+	ad_init(pot.bit);
+	*pot.dir |= (1 << pot.bit);
 
 	SetupHardware();
 
@@ -228,39 +239,18 @@ void MIDI_Task(void)
 			toProcess = false;
 		}
 
-
-		// if (JoystickChanges & JOY_LEFT)
-		// {
-		// 	MIDICommand = ((JoystickStatus & JOY_LEFT)? MIDI_COMMAND_NOTE_ON : MIDI_COMMAND_NOTE_OFF);
-		// 	MIDIPitch   = 0x3C;
-		// }
-
-		// if (JoystickChanges & JOY_UP)
-		// {
-		// 	MIDICommand = ((JoystickStatus & JOY_UP)? MIDI_COMMAND_NOTE_ON : MIDI_COMMAND_NOTE_OFF);
-		// 	MIDIPitch   = 0x3D;
-		// }
-
-		// if (JoystickChanges & JOY_RIGHT)
-		// {
-		// 	MIDICommand = ((JoystickStatus & JOY_RIGHT)? MIDI_COMMAND_NOTE_ON : MIDI_COMMAND_NOTE_OFF);
-		// 	MIDIPitch   = 0x3E;
-		// }
-
-		// if (JoystickChanges & JOY_DOWN)
-		// {
-		// 	MIDICommand = ((JoystickStatus & JOY_DOWN)? MIDI_COMMAND_NOTE_ON : MIDI_COMMAND_NOTE_OFF);
-		// 	MIDIPitch   = 0x3F;
-		// }
-
-		// if (JoystickChanges & JOY_PRESS)
-		// {
-		// 	MIDICommand = ((JoystickStatus & JOY_PRESS)? MIDI_COMMAND_NOTE_ON : MIDI_COMMAND_NOTE_OFF);
-		// 	MIDIPitch   = 0x3B;
-		// }
+		uint8_t newReading = ad_capture();
+		filteredVolume = (FILTER_WEIGHT * filteredVolume) + ((1 - FILTER_WEIGHT) * newReading); // Prevent the oscillation from sending too many messages
+		uint8_t newVolume = (uint8_t)filteredVolume;
+		if (volume != newVolume) {
+			volume = newVolume;
+			MIDICommand = MIDI_COMMAND_CONTROL_CHANGE;
+			HD44780_GoTo(16);
+			HD44780_WriteInteger(volume, 10);
+		} 
 
 		/* Check if a MIDI command is to be sent */
-		if (MIDICommand)
+		if (MIDICommand == MIDI_COMMAND_NOTE_ON || MIDICommand == MIDI_COMMAND_NOTE_OFF)
 		{
 			MIDI_EventPacket_t MIDIEvent = (MIDI_EventPacket_t)
 				{
@@ -277,9 +267,20 @@ void MIDI_Task(void)
 			/* Send the data in the endpoint to the host */
 			Endpoint_ClearIN();
 		}
+		else if (MIDICommand == MIDI_COMMAND_CONTROL_CHANGE) {
+			MIDI_EventPacket_t MIDIEvent = (MIDI_EventPacket_t)
+				{
+					.Event	= (MIDI_EVENT(0, MIDICommand)),
 
-		// /* Save previous joystick value for next joystick change detection */
-		// PrevJoystickStatus = JoystickStatus;
+					.Data1	= MIDICommand | Channel,
+					.Data2	= 7,
+					.Data3	= volume
+				};
+
+			Endpoint_Write_Stream_LE(&MIDIEvent, sizeof(MIDIEvent), NULL);
+			Endpoint_ClearIN();
+		}
+
 	}
 
 	/* Select the MIDI OUT stream */
@@ -432,5 +433,18 @@ void octaveTask(void) {
 		toProcess = false;
 		_delay_ms(250);
 	}
+}
+void ad_init(unsigned char channel){
+    ADCSRA |= (1<<ADPS2)|(1<<ADPS1)|(1<<ADPS0); // Division frequency 128 => 125KHz
+    ADCSRA &= ~(1<<ADFR);                       // Single conversion mode
+    ADMUX |= (1<<REFS0)|(1<<ADLAR);             // Voltage reference AVCC, left-adjust result
+    ADMUX = (ADMUX & 0xf0) | channel;           // Select channel   
+    ADCSRA |= (1<<ADEN);                        // Enable ADC
+}
+
+unsigned int ad_capture(void){
+    ADCSRA |= (1<<ADSC);                      // Start conversion
+    while(bit_is_set(ADCSRA, ADSC));          // Wait for conversion to complete
+    return ADCH;                              // Return 8-bit result (0-255)
 }
 
