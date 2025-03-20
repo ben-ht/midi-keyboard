@@ -42,6 +42,9 @@ this software.
 #define NB_COLS		5
 #define ADFR		5
 #define FILTER_WEIGHT	0.8
+#define MAX_VOLUME_LCD	100
+#define MAX_VOLUME_MIDI	127
+#define MAX_POT		38
 
 typedef struct {
 	volatile unsigned char *dir;
@@ -102,6 +105,7 @@ void handleOctaveLeds(void);
 void octaveTask(void);
 void ad_init(unsigned char channel);
 unsigned int ad_capture(void);
+uint8_t convert_volume(uint8_t volume, uint8_t maxVolume);
 
 /** Main program entry point. This routine configures the hardware required by the application, then
 *  enters a loop to run the application tasks in sequence.
@@ -125,7 +129,11 @@ int main(void)
 	_delay_ms(500);
 
 	HD44780_WriteString("MIDI Keyboard");
-
+	HD44780_GoTo(16);
+	HD44780_WriteInteger(0, 10);
+	HD44780_GoTo(31);
+	HD44780_WriteInteger(octave, 10);
+	
 	ad_init(pot.bit);
 	*pot.dir |= (1 << pot.bit);
 
@@ -221,6 +229,9 @@ void MIDI_Task(void)
 		uint8_t MIDICommand = 0;
 		uint8_t MIDIPitch;
 
+		uint8_t lcdVolume;
+		uint8_t midiVolume;
+
 		uint8_t JoystickStatus  = Joystick_GetStatus();
 		uint8_t JoystickChanges = (JoystickStatus ^ PrevJoystickStatus);
 
@@ -244,9 +255,15 @@ void MIDI_Task(void)
 		uint8_t newVolume = (uint8_t)filteredVolume;
 		if (volume != newVolume) {
 			volume = newVolume;
+			lcdVolume = convert_volume(volume, MAX_VOLUME_LCD);
+			midiVolume = convert_volume(volume, MAX_VOLUME_MIDI);
+			if (lcdVolume > 100) { //Volume sometimes reaches 102
+				lcdVolume = 100;
+			}
 			MIDICommand = MIDI_COMMAND_CONTROL_CHANGE;
 			HD44780_GoTo(16);
-			HD44780_WriteInteger(volume, 10);
+			HD44780_WriteInteger(lcdVolume, 10);
+			HD44780_WriteString("   ");
 		} 
 
 		/* Check if a MIDI command is to be sent */
@@ -274,7 +291,7 @@ void MIDI_Task(void)
 
 					.Data1	= MIDICommand | Channel,
 					.Data2	= 7,
-					.Data3	= volume
+					.Data3	= midiVolume
 				};
 
 			Endpoint_Write_Stream_LE(&MIDIEvent, sizeof(MIDIEvent), NULL);
@@ -448,3 +465,7 @@ unsigned int ad_capture(void){
     return ADCH;                              // Return 8-bit result (0-255)
 }
 
+
+uint8_t convert_volume(uint8_t volume, uint8_t maxVolume) {
+	return (volume * maxVolume) / MAX_POT; 
+}
