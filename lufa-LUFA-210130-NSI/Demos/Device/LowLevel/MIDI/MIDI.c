@@ -130,8 +130,10 @@ int main(void)
 
 	HD44780_WriteString("MIDI Keyboard");
 	HD44780_GoTo(16);
+	HD44780_WriteString("Vol:");
 	HD44780_WriteInteger(0, 10);
-	HD44780_GoTo(31);
+	HD44780_GoTo(27);
+	HD44780_WriteString("Oct:");
 	HD44780_WriteInteger(octave, 10);
 	
 	ad_init(pot.bit);
@@ -261,7 +263,7 @@ void MIDI_Task(void)
 				lcdVolume = 100;
 			}
 			MIDICommand = MIDI_COMMAND_CONTROL_CHANGE;
-			HD44780_GoTo(16);
+			HD44780_GoTo(20);
 			HD44780_WriteInteger(lcdVolume, 10);
 			HD44780_WriteString("   ");
 		} 
