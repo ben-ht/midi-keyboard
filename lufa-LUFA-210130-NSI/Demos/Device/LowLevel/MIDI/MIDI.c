@@ -37,6 +37,8 @@ this software.
 #include "MIDI.h"
 #include "HD44780.h"
 
+#include <avr/interrupt.h>
+
 #define NB_LEDS		2
 #define NB_LINES	4
 #define NB_COLS		5
@@ -45,6 +47,9 @@ this software.
 #define MAX_VOLUME_LCD	100
 #define MAX_VOLUME_MIDI	127
 #define MAX_POT		38
+#define MODE_OCTAVE	0
+#define MODE_INSTRUMENT	1
+#define CHANGE_MODE_DELAY	500
 
 typedef struct {
 	volatile unsigned char *dir;
@@ -86,6 +91,17 @@ bool toProcess = false;
 int octave = 3; // Defaults to 3rd octave
 uint8_t volume = 0;
 float filteredVolume = 0;
+uint8_t mode = MODE_OCTAVE;
+volatile uint8_t systemMillis = 0;
+bool buttonPressed[NB_LINES * NB_COLS] = {false};
+
+typedef enum {
+	IDLE,
+	PRESSED,
+	WAIT_RELEASE
+} ButtonState;
+ButtonState currentState = IDLE;
+bool modeTogglePending = false;
 
 // 60 to 71 => Octave 3 in order C, C#, D, D#, E, F, F#, G, G#, A, A#, B
 // 72 TO 77 => Octave 4 up to F
@@ -106,6 +122,11 @@ void octaveTask(void);
 void ad_init(unsigned char channel);
 unsigned int ad_capture(void);
 uint8_t convert_volume(uint8_t volume, uint8_t maxVolume);
+void timer0_init(void);
+uint32_t get_time_ms(void);
+bool toggleModeAllowed(void);
+bool toggleModeRequested(void);
+void toggleMode(void);
 
 /** Main program entry point. This routine configures the hardware required by the application, then
 *  enters a loop to run the application tasks in sequence.
@@ -144,13 +165,20 @@ int main(void)
 	LEDs_SetAllLEDs(LEDMASK_USB_NOTREADY);
 	GlobalInterruptEnable();
 
+	timer0_init();
+	uint8_t i = 0;
 	for (;;)
 	{
 		scanne_touches();
-		octaveTask();
+		//octaveTask();
+		toggleMode();	
 		MIDI_Task();
 		USB_USBTask();
 	}
+}
+
+ISR(TIMER0_COMPA_vect) {
+    systemMillis++;
 }
 
 /** Configures the board hardware and chip peripherals for the demo's functionality. */
@@ -348,20 +376,20 @@ void scanne_touches(void) {
 			int t = l * NB_COLS + c;
 
 			if(!(*cols[c].pin & (1 << cols[c].bit))) { // Si une colonne est à 0V
-				// touche enfoncée
-				if(isPressed == -1){
+				if(!buttonPressed[t]){
+					buttonPressed[t] = true;
 					isPressed = t;
 					isReleased = -1;
 					toProcess = true;
 				}
 			} else {
-				// pas appuyée
-				if(isPressed == t){
+				if(buttonPressed[t]){
+					buttonPressed[t] = false;
 					isReleased = t;
 					isPressed = -1;
 					toProcess = true;
-				} 
-			}		
+				} 			
+			}	
 		}
 
 		*lines[l].port |= (1 << lines[l].bit);
@@ -435,24 +463,22 @@ void handleOctaveLeds(void) {
 }
 
 void octaveTask(void) {
-	if (isPressed == 16 && toProcess) {
-		octaveUp();
-		handleOctaveLeds();
-		HD44780_GoTo(31);
-		HD44780_WriteInteger(octave, 10);
-		isPressed = -1;
-		toProcess = false;
-		_delay_ms(250);
-	} else if (isPressed == 15 && toProcess) {
-		octaveDown();
-		handleOctaveLeds();
-		HD44780_GoTo(31);
-		HD44780_WriteInteger(octave, 10);
-		isPressed = -1;
-		toProcess = false;
-		_delay_ms(250);
-	}
+    if (buttonPressed[16] && toProcess) {
+        octaveUp();
+        handleOctaveLeds();
+        HD44780_GoTo(31);
+        HD44780_WriteInteger(octave, 10);
+        isReleased = -1;
+    }
+    else if (buttonPressed[15] && toProcess) {
+        octaveDown();
+        handleOctaveLeds();
+        HD44780_GoTo(31);
+        HD44780_WriteInteger(octave, 10);
+        isReleased = -1;
+    }
 }
+
 void ad_init(unsigned char channel){
     ADCSRA |= (1<<ADPS2)|(1<<ADPS1)|(1<<ADPS0); // Division frequency 128 => 125KHz
     ADCSRA &= ~(1<<ADFR);                       // Single conversion mode
@@ -470,4 +496,58 @@ unsigned int ad_capture(void){
 
 uint8_t convert_volume(uint8_t volume, uint8_t maxVolume) {
 	return (volume * maxVolume) / MAX_POT; 
+}
+
+void timer0_init(void) {
+	//TCCR0A = 0;
+	TCCR0A |= (1 << WGM01); // CTC mode
+	TCCR0B = (1 << CS02) | (1 << CS00); // Prescaler 1024
+	OCR0A = 156;
+	TCNT0 = 0;
+	TIMSK0 |= (1 << OCIE0A);
+	sei();
+}
+
+uint32_t get_time_ms(void) {
+	uint32_t millis;
+	cli();
+	millis = systemMillis;
+	sei();
+	return millis;
+}
+
+bool toggleModeRequested(void) {
+	return buttonPressed[15] && buttonPressed[16];
+}
+
+bool toggleModeAllowed(void) {
+	return !buttonPressed[15] && !buttonPressed[16];
+}
+
+void toggleMode() {
+	switch (currentState) {
+		case IDLE:
+			if (toggleModeRequested()) {
+				currentState = WAIT_RELEASE;
+				modeTogglePending = true;
+			break;
+		case WAIT_RELEASE:
+			if (toggleModeAllowed()) {
+				if (modeTogglePending) {
+					modeTogglePending = false;
+					mode = !mode;
+
+					if (mode) {
+						HD44780_GoTo(0);
+						HD44780_WriteString("Octave      ");
+					} else {
+						HD44780_GoTo(0);
+						HD44780_WriteString("Instrument  ");
+					}
+				}
+				currentState = IDLE;
+			} 
+			break;
+		}
+	}
 }
