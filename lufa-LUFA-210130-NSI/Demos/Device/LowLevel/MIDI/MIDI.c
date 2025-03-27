@@ -63,6 +63,23 @@ typedef struct {
 	unsigned midiNote;
 } NoteMIDI;
 
+typedef struct {
+	int instrument;
+	char* instrumentName;
+} Instrument;
+
+Instrument instruments[] = {
+	{0, "Piano"},
+	{10, "Percussion"},
+	{24, "Guitar"},
+	{38, "Bass"},
+	{40, "Violin"},
+	{56, "Trumpet"},
+	{81, "Sawtooth wave"},
+	{90, "Pad"},
+	{118, "Drum"},
+}
+
 pin_t leds[NB_LEDS]={
 {&DDRE,&PORTE,&PINE,6},
 {&DDRF,&PORTF,&PINF,0}
@@ -170,7 +187,7 @@ int main(void)
 	for (;;)
 	{
 		scanne_touches();
-		//octaveTask();
+		octaveTask();
 		toggleMode();	
 		MIDI_Task();
 		USB_USBTask();
@@ -450,29 +467,15 @@ void octaveDown(void) {
 	}
 }
 
-
-void handleOctaveLeds(void) {
-	if (octave > 3) {
-		*leds[0].port |= (1 << leds[0].bit);
-	} else if (octave < 3) {
-		*leds[1].port |= (1 << leds[1].bit);
-	} else {
-		*leds[0].port &= ~(1 << leds[0].bit);
-		*leds[1].port &= ~(1 << leds[1].bit);
-	}
-}
-
 void octaveTask(void) {
-    if (buttonPressed[16] && toProcess) {
+    if (isReleased == 16 && toProcess) {
         octaveUp();
-        handleOctaveLeds();
         HD44780_GoTo(31);
         HD44780_WriteInteger(octave, 10);
         isReleased = -1;
     }
-    else if (buttonPressed[15] && toProcess) {
+    else if (isReleased == 15 && isReleased) {
         octaveDown();
-        handleOctaveLeds();
         HD44780_GoTo(31);
         HD44780_WriteInteger(octave, 10);
         isReleased = -1;
@@ -539,10 +542,10 @@ void toggleMode() {
 
 					if (mode) {
 						HD44780_GoTo(0);
-						HD44780_WriteString("Octave      ");
+						HD44780_WriteString("Octave       ");
 					} else {
 						HD44780_GoTo(0);
-						HD44780_WriteString("Instrument  ");
+						HD44780_WriteString("Instrument   ");
 					}
 				}
 				currentState = IDLE;
