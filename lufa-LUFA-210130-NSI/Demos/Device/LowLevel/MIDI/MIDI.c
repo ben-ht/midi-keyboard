@@ -59,7 +59,7 @@ typedef struct {
 } pin_t;
 
 typedef struct {
-	int keysButton;
+	int button;
 	unsigned midiNote;
 } NoteMIDI;
 
@@ -68,7 +68,7 @@ typedef struct {
 	char* instrumentName;
 } Instrument;
 
-Instrument instruments[] = {
+Instrument instruments[9] = {
 	{0, "Piano"},
 	{10, "Percussion"},
 	{24, "Guitar"},
@@ -78,7 +78,7 @@ Instrument instruments[] = {
 	{81, "Sawtooth wave"},
 	{90, "Pad"},
 	{118, "Drum"},
-}
+};
 
 pin_t leds[NB_LEDS]={
 {&DDRE,&PORTE,&PINE,6},
@@ -111,7 +111,7 @@ float filteredVolume = 0;
 uint8_t mode = MODE_OCTAVE;
 volatile uint8_t systemMillis = 0;
 bool buttonPressed[NB_LINES * NB_COLS] = {false};
-
+uint8_t currentInstrument = 0;
 typedef enum {
 	IDLE,
 	PRESSED,
@@ -128,14 +128,13 @@ NoteMIDI notes[18] = {
 	{12, 72}, {11, 73}, {10, 74}, {19, 75}, {18, 76}, {17, 77}
 };
 
-int giveMidiNote(int);
-void scanne_touches(void);
-void conf_horloge(void);
+int getMidiNote(int);
+void scanKeyboard(void);
+void initializeClock(void);
 void init(void);
 void octaveUp(void);
 void octaveDown(void);
 void handleOctaveLeds(void);
-void octaveTask(void);
 void ad_init(unsigned char channel);
 unsigned int ad_capture(void);
 uint8_t convert_volume(uint8_t volume, uint8_t maxVolume);
@@ -144,13 +143,14 @@ uint32_t get_time_ms(void);
 bool toggleModeAllowed(void);
 bool toggleModeRequested(void);
 void toggleMode(void);
+void playStartupAnimation(void);
 
 /** Main program entry point. This routine configures the hardware required by the application, then
 *  enters a loop to run the application tasks in sequence.
 */
 int main(void)
 {
-	conf_horloge();
+	initializeClock();
 
 	// désactive JTAG pour utilisation de PF4 à PF7 :
 	MCUCR |= (1<<JTD);
@@ -166,7 +166,18 @@ int main(void)
 
 	_delay_ms(500);
 
-	HD44780_WriteString("MIDI Keyboard");
+	playStartupAnimation();
+
+	_delay_ms(500);
+
+	HD44780_WriteCommand(LCD_CLEAR);
+	
+	_delay_ms(500);
+
+	HD44780_GoTo(0);
+	HD44780_WriteString(instruments[currentInstrument].instrumentName);
+	HD44780_GoTo(13);
+	HD44780_WriteString("OCT");
 	HD44780_GoTo(16);
 	HD44780_WriteString("Vol:");
 	HD44780_WriteInteger(0, 10);
@@ -186,8 +197,7 @@ int main(void)
 	uint8_t i = 0;
 	for (;;)
 	{
-		scanne_touches();
-		octaveTask();
+		scanKeyboard();
 		toggleMode();	
 		MIDI_Task();
 		USB_USBTask();
@@ -285,18 +295,51 @@ void MIDI_Task(void)
 		/* Get board button status - if pressed use channel 10 (percussion), otherwise use channel 1 */
 		uint8_t Channel = ((Buttons_GetStatus() & BUTTONS_BUTTON1) ? MIDI_CHANNEL(10) : MIDI_CHANNEL(1));
 
-		if(isPressed != -1 && toProcess) {
+		if(isPressed != -1 && isPressed != 16 && isPressed != 15 && toProcess) {
 			MIDICommand = MIDI_COMMAND_NOTE_ON;
-			MIDIPitch = giveMidiNote(isPressed);
+			MIDIPitch = getMidiNote(isPressed);
 			toProcess = false;
 		}
 
-		if(isReleased != -1 && toProcess) {
+		if(isReleased != -1 && isReleased != 16 && isReleased != 15 && toProcess) {
 			MIDICommand = MIDI_COMMAND_NOTE_OFF;
-			MIDIPitch = giveMidiNote(isReleased);
+			MIDIPitch = getMidiNote(isReleased);
 			toProcess = false;
 		}
 
+		if (isReleased == 16 && toProcess && currentState != WAIT_RELEASE) {
+			if (mode == MODE_OCTAVE) {
+				octaveUp();
+				HD44780_GoTo(31);
+				HD44780_WriteInteger(octave, 10);
+				isReleased = -1;
+			} else if (mode == MODE_INSTRUMENT) {
+				if (currentInstrument < 8) {
+					currentInstrument++;
+					MIDICommand = MIDI_COMMAND_PROGRAM_CHANGE;
+					HD44780_GoTo(0);
+					HD44780_WriteString(instruments[currentInstrument].instrumentName);
+				}
+				isReleased = -1;
+			}
+		}
+		else if (isReleased == 15 && toProcess && currentState != WAIT_RELEASE) {
+			if (mode == MODE_OCTAVE) {
+				octaveDown();
+				HD44780_GoTo(31);
+				HD44780_WriteInteger(octave, 10);
+				isReleased = -1;
+			} else if (mode == MODE_INSTRUMENT) {
+				if (currentInstrument > 0) {
+					currentInstrument --;
+					MIDICommand = MIDI_COMMAND_PROGRAM_CHANGE;
+					HD44780_GoTo(0);
+					HD44780_WriteString(instruments[currentInstrument].instrumentName);	
+				}
+				isReleased = -1;
+			}
+		}
+			
 		uint8_t newReading = ad_capture();
 		filteredVolume = (FILTER_WEIGHT * filteredVolume) + ((1 - FILTER_WEIGHT) * newReading); // Prevent the oscillation from sending too many messages
 		uint8_t newVolume = (uint8_t)filteredVolume;
@@ -310,7 +353,7 @@ void MIDI_Task(void)
 			MIDICommand = MIDI_COMMAND_CONTROL_CHANGE;
 			HD44780_GoTo(20);
 			HD44780_WriteInteger(lcdVolume, 10);
-			HD44780_WriteString("   ");
+			HD44780_WriteString("  ");
 		} 
 
 		/* Check if a MIDI command is to be sent */
@@ -339,6 +382,17 @@ void MIDI_Task(void)
 					.Data1	= MIDICommand | Channel,
 					.Data2	= 7,
 					.Data3	= midiVolume
+				};
+
+			Endpoint_Write_Stream_LE(&MIDIEvent, sizeof(MIDIEvent), NULL);
+			Endpoint_ClearIN();
+		} else if (MIDICommand == MIDI_COMMAND_PROGRAM_CHANGE) {
+			MIDI_EventPacket_t MIDIEvent = (MIDI_EventPacket_t)
+				{
+					.Event	= (MIDI_EVENT(0, MIDICommand)),
+					.Data1	= MIDICommand | MIDI_CHANNEL(1),
+					.Data2	= instruments[currentInstrument].instrument,
+					.Data3	= 0
 				};
 
 			Endpoint_Write_Stream_LE(&MIDIEvent, sizeof(MIDIEvent), NULL);
@@ -381,18 +435,16 @@ void MIDI_Task(void)
 }
 
 
-void scanne_touches(void) {
+void scanKeyboard(void) {
 	for(uint8_t l=0; l<NB_LINES ; l++) {
 
-		// activer une ligne à la fois
-		*lines[l].port &= ~(1 << lines[l].bit); // Cmet la ligne à 0V
+		*lines[l].port &= ~(1 << lines[l].bit);
 
-		// vérifier chaque colonne
 		for(uint8_t c = 0; c < NB_COLS; c++) {
 
 			int t = l * NB_COLS + c;
 
-			if(!(*cols[c].pin & (1 << cols[c].bit))) { // Si une colonne est à 0V
+			if(!(*cols[c].pin & (1 << cols[c].bit))) {
 				if(!buttonPressed[t]){
 					buttonPressed[t] = true;
 					isPressed = t;
@@ -413,7 +465,7 @@ void scanne_touches(void) {
 	}
 }
 
-void conf_horloge(void){
+void initializeClock(void){
 	CLKSEL0 = 0b00010101;   // sélection de l'horloge externe
 	CLKSEL1 = 0b00010000;   // minimum de 16Mhz
 	CLKPR = 0b10000000;     // modification du diviseur d'horloge (CLKPCE=1)
@@ -434,11 +486,11 @@ void init(void){
 	for(int i=0;i<NB_LINES;i++) *lines[i].dir |= (1 << lines[i].bit);
 }
 
-int giveMidiNote(int buttonId) {
+int getMidiNote(int buttonId) {
 	// Recherche d'une note
 	int taille = sizeof(notes) / sizeof(notes[0]);
 	for (int i = 0; i < taille; i++) {
-		if (buttonId == notes[i].keysButton) {
+		if (buttonId == notes[i].button) {
 			return notes[i].midiNote;
 		}
 	}
@@ -467,21 +519,6 @@ void octaveDown(void) {
 	}
 }
 
-void octaveTask(void) {
-    if (isReleased == 16 && toProcess) {
-        octaveUp();
-        HD44780_GoTo(31);
-        HD44780_WriteInteger(octave, 10);
-        isReleased = -1;
-    }
-    else if (isReleased == 15 && isReleased) {
-        octaveDown();
-        HD44780_GoTo(31);
-        HD44780_WriteInteger(octave, 10);
-        isReleased = -1;
-    }
-}
-
 void ad_init(unsigned char channel){
     ADCSRA |= (1<<ADPS2)|(1<<ADPS1)|(1<<ADPS0); // Division frequency 128 => 125KHz
     ADCSRA &= ~(1<<ADFR);                       // Single conversion mode
@@ -502,7 +539,6 @@ uint8_t convert_volume(uint8_t volume, uint8_t maxVolume) {
 }
 
 void timer0_init(void) {
-	//TCCR0A = 0;
 	TCCR0A |= (1 << WGM01); // CTC mode
 	TCCR0B = (1 << CS02) | (1 << CS00); // Prescaler 1024
 	OCR0A = 156;
@@ -541,16 +577,41 @@ void toggleMode() {
 					mode = !mode;
 
 					if (mode) {
-						HD44780_GoTo(0);
-						HD44780_WriteString("Octave       ");
+						HD44780_GoTo(13);
+						HD44780_WriteString("INS");
 					} else {
-						HD44780_GoTo(0);
-						HD44780_WriteString("Instrument   ");
+						HD44780_GoTo(13);
+						HD44780_WriteString("OCT");
 					}
 				}
 				currentState = IDLE;
+				isReleased = -1; //Prevent octave change on release
 			} 
 			break;
 		}
 	}
+}
+
+void playStartupAnimation(void) {
+    char display[17];  // 16 characters + null terminator
+    const char* text = "MIDI Keyboard";
+    int text_length = strlen(text);
+    int lcd_width = 16;
+    
+    for (int position = lcd_width; position >= 0; position--) {
+        memset(display, ' ', sizeof(display) - 1);
+        display[sizeof(display) - 1] = '\0';
+        
+        for (int i = 0; i < text_length; i++) {
+            int display_pos = position + i;
+            if (display_pos >= 0 && display_pos < lcd_width) {
+                display[display_pos] = text[i];
+            }
+        }
+        
+        HD44780_GoTo(0);
+        HD44780_WriteString(display);
+        
+        _delay_ms(150);
+    }
 }
