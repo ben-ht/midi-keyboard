@@ -50,6 +50,12 @@ this software.
 #define MODE_OCTAVE	0
 #define MODE_INSTRUMENT	1
 #define CHANGE_MODE_DELAY	500
+#define NB_INSTRUMENTS	8
+#define BUTTON_OCTAVE_UP	16
+#define BUTTON_OCTAVE_DOWN	15
+#define NB_NOTES	18
+#define MIN_OCTAVE 1
+#define MAX_OCTAVE 7
 
 typedef struct {
 	volatile unsigned char *dir;
@@ -68,15 +74,20 @@ typedef struct {
 	char* instrumentName;
 } Instrument;
 
-Instrument instruments[8] = {
+typedef enum {
+	IDLE,
+	WAIT_RELEASE
+} ToggleModeState;
+
+Instrument instruments[NB_INSTRUMENTS] = {
 	{0, "Piano"},
-	{10, "Percussion"},
+	{11, "Percussion"},
 	{24, "Guitar"},
-	{38, "Bass"},
+	{33, "Bass"},
 	{40, "Violin"},
 	{56, "Trumpet"},
 	{90, "Pad"},
-	{118, "Drum"},
+	{118, "Drums"},
 };
 
 pin_t leds[NB_LEDS]={
@@ -107,20 +118,17 @@ bool toProcess = false;
 int octave = 3; // Defaults to 3rd octave
 uint8_t volume = 0;
 float filteredVolume = 0;
-uint8_t mode = MODE_OCTAVE;
 volatile uint8_t systemMillis = 0;
 bool buttonPressed[NB_LINES * NB_COLS] = {false};
 uint8_t currentInstrument = 0;
-typedef enum {
-	IDLE,
-	WAIT_RELEASE
-} ButtonState;
-ButtonState currentState = IDLE;
 bool modeTogglePending = false;
+
+ToggleModeState currentState = IDLE;
+uint8_t mode = MODE_OCTAVE;
 
 // 60 to 71 => Octave 3 in order C, C#, D, D#, E, F, F#, G, G#, A, A#, B
 // 72 TO 77 => Octave 4 up to F
-NoteMIDI notes[18] = { 
+NoteMIDI notes[NB_NOTES] = { 
 	{4, 60}, {3, 61}, {1, 62}, {2, 63}, {0, 64}, {9, 65},
 	{8, 66}, {7, 67}, {6, 68}, {5, 69}, {14, 70}, {13, 71},
 	{12, 72}, {11, 73}, {10, 74}, {19, 75}, {18, 76}, {17, 77}
@@ -192,7 +200,7 @@ int main(void)
 	GlobalInterruptEnable();
 
 	timer0_init();
-	uint8_t i = 0;
+
 	for (;;)
 	{
 		scanKeyboard();
@@ -287,43 +295,41 @@ void MIDI_Task(void)
 		uint8_t lcdVolume;
 		uint8_t midiVolume;
 
-		uint8_t JoystickStatus  = Joystick_GetStatus();
-		uint8_t JoystickChanges = (JoystickStatus ^ PrevJoystickStatus);
-
-		/* Get board button status - if pressed use channel 10 (percussion), otherwise use channel 1 */
-		uint8_t Channel = ((Buttons_GetStatus() & BUTTONS_BUTTON1) ? MIDI_CHANNEL(10) : MIDI_CHANNEL(1));
-
-		if(isPressed != -1 && isPressed != 16 && isPressed != 15 && toProcess) {
+		if(isPressed != -1 && isPressed != BUTTON_OCTAVE_UP && isPressed != BUTTON_OCTAVE_DOWN && toProcess) {
 			MIDICommand = MIDI_COMMAND_NOTE_ON;
 			MIDIPitch = getMidiNote(isPressed);
 			toProcess = false;
 		}
 
-		if(isReleased != -1 && isReleased != 16 && isReleased != 15 && toProcess) {
+		if(isReleased != -1 && isReleased != BUTTON_OCTAVE_UP && isReleased != BUTTON_OCTAVE_DOWN && toProcess) {
 			MIDICommand = MIDI_COMMAND_NOTE_OFF;
 			MIDIPitch = getMidiNote(isReleased);
 			toProcess = false;
 		}
 
-		if (isReleased == 16 && toProcess && currentState != WAIT_RELEASE) {
+		if (isReleased == BUTTON_OCTAVE_UP && toProcess && currentState != WAIT_RELEASE) {
 			if (mode == MODE_OCTAVE) {
 				octaveUp();
 				HD44780_GoTo(31);
 				HD44780_WriteInteger(octave, 10);
 				isReleased = -1;
 			} else if (mode == MODE_INSTRUMENT) {
-				if (currentInstrument < 8) {
+				if (currentInstrument < NB_INSTRUMENTS - 1) {
 					currentInstrument++;
-					MIDICommand = MIDI_COMMAND_PROGRAM_CHANGE;
-					HD44780_GoTo(0);
-					HD44780_WriteString("             ");
-					HD44780_GoTo(0);
-					HD44780_WriteString(instruments[currentInstrument].instrumentName);
+				} else {
+					currentInstrument = 0;
 				}
+
+				MIDICommand = MIDI_COMMAND_PROGRAM_CHANGE;
+				HD44780_GoTo(0);
+				HD44780_WriteString("             ");
+				HD44780_GoTo(0);
+				HD44780_WriteString(instruments[currentInstrument].instrumentName);
+				
 				isReleased = -1;
 			}
 		}
-		else if (isReleased == 15 && toProcess && currentState != WAIT_RELEASE) {
+		else if (isReleased == BUTTON_OCTAVE_DOWN && toProcess && currentState != WAIT_RELEASE) {
 			if (mode == MODE_OCTAVE) {
 				octaveDown();
 				HD44780_GoTo(31);
@@ -331,13 +337,17 @@ void MIDI_Task(void)
 				isReleased = -1;
 			} else if (mode == MODE_INSTRUMENT) {
 				if (currentInstrument > 0) {
-					currentInstrument --;
-					MIDICommand = MIDI_COMMAND_PROGRAM_CHANGE;
-					HD44780_GoTo(0);
-					HD44780_WriteString("             ");
-					HD44780_GoTo(0);
-					HD44780_WriteString(instruments[currentInstrument].instrumentName);	
+					currentInstrument--;
+				} else {
+					currentInstrument = NB_INSTRUMENTS - 1;
 				}
+				
+				MIDICommand = MIDI_COMMAND_PROGRAM_CHANGE;
+				HD44780_GoTo(0);
+				HD44780_WriteString("             ");
+				HD44780_GoTo(0);
+				HD44780_WriteString(instruments[currentInstrument].instrumentName);	
+
 				isReleased = -1;
 			}
 		}
@@ -349,7 +359,7 @@ void MIDI_Task(void)
 			volume = newVolume;
 			lcdVolume = convert_volume(volume, MAX_VOLUME_LCD);
 			midiVolume = convert_volume(volume, MAX_VOLUME_MIDI);
-			if (lcdVolume > 100) { //Volume sometimes reaches 102
+			if (lcdVolume > 100) { // Volume sometimes reaches 102
 				lcdVolume = 100;
 			}
 			MIDICommand = MIDI_COMMAND_CONTROL_CHANGE;
@@ -365,7 +375,7 @@ void MIDI_Task(void)
 				{
 					.Event       = MIDI_EVENT(0, MIDICommand),
 
-					.Data1       = MIDICommand | Channel,
+					.Data1       = MIDICommand | MIDI_CHANNEL(1),
 					.Data2       = MIDIPitch,
 					.Data3       = MIDI_STANDARD_VELOCITY,
 				};
@@ -381,7 +391,7 @@ void MIDI_Task(void)
 				{
 					.Event	= (MIDI_EVENT(0, MIDICommand)),
 
-					.Data1	= MIDICommand | Channel,
+					.Data1	= MIDICommand | MIDI_CHANNEL(1),
 					.Data2	= 7,
 					.Data3	= midiVolume
 				};
@@ -438,7 +448,7 @@ void MIDI_Task(void)
 
 
 void scanKeyboard(void) {
-	for(uint8_t l=0; l<NB_LINES ; l++) {
+	for(uint8_t l = 0; l < NB_LINES ; l++) {
 
 		*lines[l].port &= ~(1 << lines[l].bit);
 
@@ -480,8 +490,8 @@ void init(void){
 
 	// Set cols as input + pull up charge
 	for(int i=0;i<NB_COLS;i++){
-		*cols[i].dir &= ~(1 << cols[i].bit); // 0 : une entrée
-		*cols[i].port |= (1 << cols[i].bit); // 1 : pull up, résist charge
+		*cols[i].dir &= ~(1 << cols[i].bit); // input
+		*cols[i].port |= (1 << cols[i].bit); // pull up charge
 	}
 
 	// Set rows as ouput
@@ -489,9 +499,7 @@ void init(void){
 }
 
 int getMidiNote(int buttonId) {
-	// Recherche d'une note
-	int taille = sizeof(notes) / sizeof(notes[0]);
-	for (int i = 0; i < taille; i++) {
+	for (int i = 0; i < NB_NOTES; i++) {
 		if (buttonId == notes[i].button) {
 			return notes[i].midiNote;
 		}
@@ -501,22 +509,20 @@ int getMidiNote(int buttonId) {
 }
 
 void octaveUp(void) {
-	size_t length = sizeof(notes) / sizeof(notes[0]);
-	for (int i = 0; i < length; i++) {
-		notes[i].midiNote += 18;
+	for (int i = 0; i < NB_NOTES; i++) {
+		notes[i].midiNote += NB_NOTES;
 	}
-	if (octave < 7) {
+	if (octave < MAX_OCTAVE) {
 		octave++;
 	}
 }
 
 
 void octaveDown(void) {
-	size_t length = sizeof(notes) / sizeof(notes[0]);
-	for (int i = 0; i < length; i++) {
-		notes[i].midiNote -= 18;
+	for (int i = 0; i < NB_NOTES; i++) {
+		notes[i].midiNote -= NB_NOTES;
 	}
-	if (octave > 1) {
+	if (octave > MIN_OCTAVE) {
 		octave--;
 	}
 }
@@ -558,11 +564,11 @@ uint32_t get_time_ms(void) {
 }
 
 bool toggleModeRequested(void) {
-	return buttonPressed[15] && buttonPressed[16];
+	return buttonPressed[BUTTON_OCTAVE_UP] && buttonPressed[BUTTON_OCTAVE_DOWN];
 }
 
 bool toggleModeAllowed(void) {
-	return !buttonPressed[15] && !buttonPressed[16];
+	return !buttonPressed[BUTTON_OCTAVE_UP] && !buttonPressed[BUTTON_OCTAVE_DOWN];
 }
 
 void toggleMode() {
