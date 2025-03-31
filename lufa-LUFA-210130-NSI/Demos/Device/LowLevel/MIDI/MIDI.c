@@ -68,14 +68,13 @@ typedef struct {
 	char* instrumentName;
 } Instrument;
 
-Instrument instruments[9] = {
+Instrument instruments[8] = {
 	{0, "Piano"},
 	{10, "Percussion"},
 	{24, "Guitar"},
 	{38, "Bass"},
 	{40, "Violin"},
 	{56, "Trumpet"},
-	{81, "Sawtooth wave"},
 	{90, "Pad"},
 	{118, "Drum"},
 };
@@ -114,7 +113,6 @@ bool buttonPressed[NB_LINES * NB_COLS] = {false};
 uint8_t currentInstrument = 0;
 typedef enum {
 	IDLE,
-	PRESSED,
 	WAIT_RELEASE
 } ButtonState;
 ButtonState currentState = IDLE;
@@ -164,13 +162,13 @@ int main(void)
 	HD44780_WriteCommand(LCD_HOME);
 	HD44780_WriteCommand(LCD_INCR_RIGHT);
 
-	_delay_ms(500);
+	//_delay_ms(500);
 
-	playStartupAnimation();
+	//playStartupAnimation();
 
-	_delay_ms(500);
+	//delay_ms(500);
 
-	HD44780_WriteCommand(LCD_CLEAR);
+	//HD44780_WriteCommand(LCD_CLEAR);
 	
 	_delay_ms(500);
 
@@ -318,6 +316,8 @@ void MIDI_Task(void)
 					currentInstrument++;
 					MIDICommand = MIDI_COMMAND_PROGRAM_CHANGE;
 					HD44780_GoTo(0);
+					HD44780_WriteString("             ");
+					HD44780_GoTo(0);
 					HD44780_WriteString(instruments[currentInstrument].instrumentName);
 				}
 				isReleased = -1;
@@ -333,6 +333,8 @@ void MIDI_Task(void)
 				if (currentInstrument > 0) {
 					currentInstrument --;
 					MIDICommand = MIDI_COMMAND_PROGRAM_CHANGE;
+					HD44780_GoTo(0);
+					HD44780_WriteString("             ");
 					HD44780_GoTo(0);
 					HD44780_WriteString(instruments[currentInstrument].instrumentName);	
 				}
@@ -569,6 +571,7 @@ void toggleMode() {
 			if (toggleModeRequested()) {
 				currentState = WAIT_RELEASE;
 				modeTogglePending = true;
+			}
 			break;
 		case WAIT_RELEASE:
 			if (toggleModeAllowed()) {
@@ -586,9 +589,8 @@ void toggleMode() {
 				}
 				currentState = IDLE;
 				isReleased = -1; //Prevent octave change on release
-			} 
+			}
 			break;
-		}
 	}
 }
 
